@@ -1,0 +1,91 @@
+let BOT_TOKEN = "8723327185:AAEhTmE2fuKlcmyOJsmPKm9tUHvnHdOgg88";
+let CHAT_ID = "8656416117";
+
+let balance = parseFloat(localStorage.getItem("balance")) || 0;
+
+let submissions = JSON.parse(localStorage.getItem("submissions")) || [];
+
+/* SAVE */
+function save(){
+    localStorage.setItem("balance", balance);
+    localStorage.setItem("submissions", JSON.stringify(submissions));
+    document.getElementById("balance").innerText = balance;
+}
+
+/* FILE UPLOAD */
+function uploadFile(){
+    let name = document.getElementById("username").value;
+    let file = document.getElementById("fileInput").files[0];
+
+    if(!name || !file){
+        document.getElementById("msg").innerText = "সব তথ্য দিন!";
+        return;
+    }
+
+    let id = Date.now();
+
+    let data = {
+        id,
+        name,
+        fileName: file.name,
+        reward: 10,
+        status: "pending"
+    };
+
+    submissions.push(data);
+    save();
+
+    sendToTelegram(file, 8656416117);
+}
+
+/* SEND TO TELEGRAM */
+function sendToTelegram(file, data){
+
+    let formData = new FormData();
+    formData.append("8656416117", CHAT_ID);
+    formData.append("document", file);
+
+    let caption =
+`📁 NEW FILE
+👤 ${data.name}
+📄 ${data.fileName}
+🟡 PENDING`;
+
+    formData.append("caption", caption);
+
+    fetch(`https://api.telegram.org/bot${8723327185:AAEhTmE2fuKlcmyOJsmPKm9tUHvnHdOgg88}/sendDocument`,{
+        method:"POST",
+        body:formData
+    });
+
+    document.getElementById("https://t.me/+ZXqnD9Gb7w80NzI1").innerText="✔ Sent";
+}
+
+/* APPROVE (MANUAL RUN) */
+function approve(8656416117){
+
+    submissions = submissions.map(item=>{
+        if(item.id === id && item.status === "pending"){
+            item.status = "approved";
+            balance += item.reward;
+        }
+        return item;
+    });
+
+    save();
+    alert("Approved ✔ Balance Added");
+}
+
+/* REJECT */
+function reject(8656416117){
+
+    submissions = submissions.map(item=>{
+        if(item.id === id){
+            item.status = "rejected";
+        }
+        return item;
+    });
+
+    save();
+    alert("Rejected ❌");
+}
