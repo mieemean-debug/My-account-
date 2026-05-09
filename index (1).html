@@ -1,91 +1,312 @@
-let BOT_TOKEN = "8723327185:AAEhTmE2fuKlcmyOJsmPKm9tUHvnHdOgg88";
-let CHAT_ID = "8656416117";
 
-let balance = parseFloat(localStorage.getItem("balance")) || 0;
 
-let submissions = JSON.parse(localStorage.getItem("submissions")) || [];
+Folder Structure
 
-/* SAVE */
-function save(){
-    localStorage.setItem("balance", balance);
-    localStorage.setItem("submissions", JSON.stringify(submissions));
-    document.getElementById("balance").innerText = balance;
-}
+project/
+│
+├── server.js
+├── .env
+├── uploads/
+├── models/
+│   ├── User.js
+│   ├── File.js
+│   └── Withdraw.js
+│
+├── routes/
+│   ├── upload.js
+│   ├── withdraw.js
+│   └── admin.js
+│
+└── public/
+    └── index.html
 
-/* FILE UPLOAD */
-function uploadFile(){
-    let name = document.getElementById("username").value;
-    let file = document.getElementById("fileInput").files[0];
 
-    if(!name || !file){
-        document.getElementById("msg").innerText = "সব তথ্য দিন!";
-        return;
+---
+
+.env
+
+BOT_TOKEN=8755339637:AAHhHhakp9tBR4kxSY9TTioqQS0aineHngk
+ADMIN_ID=8656416117
+MONGO_URI=
+PORT=3000https://mieemean-debug.github.io/My-account-/
+
+
+---
+
+User Model
+
+const mongoose = require('mongoose');
+
+const userSchema = new mongoose.Schema({
+  telegramId: String,
+  username: String,
+  balance: {
+    type: Number,
+    default: 0
+  }
+});
+
+module.exports = mongoose.model('User', userSchema);
+
+
+---
+
+File Model
+
+const mongoose = require('mongoose');
+
+const fileSchema = new mongoose.Schema({
+  telegramId: String,
+  fileName: String,
+  path: String,
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+module.exports = mongoose.model('File', fileSchema);
+
+
+---
+
+Withdraw Model
+
+const mongoose = require('mongoose');
+
+const withdrawSchema = new mongoose.Schema({
+  telegramId: String,
+  amount: Number,
+  method: String,
+  wallet: String,
+  status: {
+    type: String,
+    default: 'pending'
+  }
+});
+
+module.exports = mongoose.model('Withdraw', withdrawSchema);
+
+
+---
+
+Main Server (server.js)
+
+require('dotenv').config();
+
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const multer = require('multer');
+const axios = require('axios');
+
+const User = require('./models/User');
+const File = require('./models/File');
+const Withdraw = require('./models/Withdraw');
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+app.use('/uploads', express.static('uploads'));
+
+mongoose.connect(process.env.MONGO_URI);
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/');
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
+});
+
+const upload = multer({ storage });
+
+// FILE SUBMIT
+app.post('/upload', upload.single('file'), async (req, res) => {
+  try {
+    const { telegramId } = req.body;
+
+    const saved = await File.create({
+      telegramId,
+      fileName: req.file.filename,
+      path: req.file.path
+    });
+
+    // Send notification to admin
+    await axios.post(
+      `https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`,
+      {
+        chat_id: process.env.ADMIN_ID,
+        text: `New file submitted by ${telegramId}`
+      }
+    );
+
+    res.json({ success: true, data: saved });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// CREATE USER
+app.post('/register', async (req, res) => {
+  const { telegramId, username } = req.body;
+
+  let user = await User.findOne({ telegramId });
+
+  if (!user) {
+    user = await User.create({ telegramId, username });
+  }
+
+  res.json(user);
+});
+
+// GET BALANCE
+app.get('/balance/:telegramId', async (req, res) => {
+  const user = await User.findOne({
+    telegramId: req.params.telegramId
+  });
+
+  res.json({
+    balance: user?.balance || 0
+  });
+});
+
+// MANUAL BALANCE ADD
+app.post('/admin/add-balance', async (req, res) => {
+  const { telegramId, amount } = req.body;
+
+  const user = await User.findOne({ telegramId });
+
+  if (!user) {
+    return res.json({ error: 'User not found' });
+  }
+
+  user.balance += Number(amount);
+  await user.save();
+
+  // notify user
+  await axios.post(
+    `https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`,
+    {
+      chat_id: telegramId,
+      text: `Balance added: ${amount}`
     }
+  );
 
-    let id = Date.now();
+  res.json({ success: true });
+});
 
-    let data = {
-        id,
-        name,
-        fileName: file.name,
-        reward: 10,
-        status: "pending"
-    };
+// WITHDRAW REQUEST
+app.post('/withdraw', async (req, res) => {
+  const { telegramId, amount, method, wallet } = req.body;
 
-    submissions.push(data);
-    save();
+  const user = await User.findOne({ telegramId });
 
-    sendToTelegram(file, 8656416117);
+  if (!user) {
+    return res.json({ error: 'User not found' });
+  }
+
+  if (user.balance < amount) {
+    return res.json({ error: 'Insufficient balance' });
+  }
+
+  user.balance -= amount;
+  await user.save();
+
+  const withdraw = await Withdraw.create({
+    telegramId,
+    amount,
+    method,
+    wallet
+  });
+
+  await axios.post(
+    `https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`,
+    {
+      chat_id: process.env.ADMIN_ID,
+      text: `Withdraw Request\nUser: ${telegramId}\nAmount: ${amount}\nMethod: ${method}\nWallet: ${wallet}`
+    }
+  );
+
+  res.json({ success: true, withdraw });
+});
+
+app.listen(process.env.PORT, () => {
+  console.log('Server running');
+});
+
+
+---
+
+Telegram Mini App (public/index.html)
+
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mini App</title>
+</head>
+<body>
+
+<h2>Upload File</h2>
+
+<input type="file" id="file" />
+<button onclick="uploadFile()">Submit</button>
+
+<h2>Withdraw</h2>
+
+<input type="number" id="amount" placeholder="Amount" />
+
+<select id="method">
+  <option value="bkash">bKash</option>
+  <option value="bep20">BEP20</option>
+</select>
+
+<input type="text" id="wallet" placeholder="Wallet / Number" />
+
+<button onclick="withdraw()">Withdraw</button>
+
+<script>
+const tg = window.Telegram.WebApp;
+const user = tg.initDataUnsafe.user;
+
+async function uploadFile() {
+  const fileInput = document.getElementById('file');
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('telegramId', user.id);
+
+  await fetch('/upload', {
+    method: 'POST',
+    body: formData
+  });
+
+  alert('File submitted');
 }
 
-/* SEND TO TELEGRAM */
-function sendToTelegram(file, data){
+async function withdraw() {
+  const amount = document.getElementById('amount').value;
+  const method = document.getElementById('method').value;
+  const wallet = document.getElementById('wallet').value;
 
-    let formData = new FormData();
-    formData.append("8656416117", CHAT_ID);
-    formData.append("document", file);
+  await fetch('/withdraw', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      telegramId: user.id,
+      amount,
+      method,
+      wallet
+    })
+  });
 
-    let caption =
-`📁 NEW FILE
-👤 ${data.name}
-📄 ${data.fileName}
-🟡 PENDING`;
-
-    formData.append("caption", caption);
-
-    fetch(`https://api.telegram.org/bot${8723327185:AAEhTmE2fuKlcmyOJsmPKm9tUHvnHdOgg88}/sendDocument`,{
-        method:"POST",
-        body:formData
-    });
-
-    document.getElementById("https://t.me/+ZXqnD9Gb7w80NzI1").innerText="✔ Sent";
+  alert('Withdraw request sent');
 }
+</script>
 
-/* APPROVE (MANUAL RUN) */
-function approve(8656416117){
-
-    submissions = submissions.map(item=>{
-        if(item.id === id && item.status === "pending"){
-            item.status = "approved";
-            balance += item.reward;
-        }
-        return item;
-    });
-
-    save();
-    alert("Approved ✔ Balance Added");
-}
-
-/* REJECT */
-function reject(8656416117){
-
-    submissions = submissions.map(item=>{
-        if(item.id === id){
-            item.status = "rejected";
-        }
-        return item;
-    });
-
-    save();
-    alert("Rejected ❌");
-}
+</body>
+</html>
